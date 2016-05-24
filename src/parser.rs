@@ -2,7 +2,7 @@ use http_muncher;
 use token::HttpToken;
 use parser_handler::ParserHandler;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParserError {
     pub error: String,
 }
@@ -43,11 +43,13 @@ impl Parser {
         let mut nparsed = 0;
         if self.error.is_none() {
             if let Some(data) = data {
-                nparsed = self.parser.parse(data);
-                if self.parser.has_error() {
-                    self.error = Some(ParserError {
-                        error: self.parser.error().to_string(),
-                    });
+                if data.len() > 0 {
+                    nparsed = self.parser.parse(data);
+                    if self.parser.has_error() {
+                        self.error = Some(ParserError {
+                            error: self.parser.error().to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -91,46 +93,69 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn testbed() {
-        use http_muncher::*;
-
-        struct MyHandler;
-        impl ParserHandler for MyHandler {
-            fn on_header_field(&mut self, header: &[u8]) -> bool {
-                println!("{:?}: ", String::from_utf8(header.iter().cloned().collect::<Vec<_>>()).unwrap());
-                true
-            }
-            fn on_header_value(&mut self, value: &[u8]) -> bool {
-                println!("\t {:?}", String::from_utf8(value.iter().cloned().collect::<Vec<_>>()).unwrap());
-                true
-            }
-        }
-
-        let http_request = b"GET / HTTP/1.0\r\n\
-                             Cont";
-
-        let handler = MyHandler;
-        let mut parser = Parser::request(handler);
-        parser.parse(http_request);
-        let http_request = b"ent-Length: 00";
-        parser.parse(http_request);
-        let http_request = b"00\r\n\r\n";
-        parser.parse(http_request);
-    }
+    use super::*;
+    use token::HttpToken;
 
     #[test]
-    fn testbed2() {
-        use super::*;
-
+    fn simple() {
         let mut parser = Parser::request();
-        let mut http_request: Vec<_> = b"GET / HTTP/1.0\r\n\
-                                         Content-Length: 0000\r\n\r\n".iter()
+        let mut tokens = Vec::new();
+        let mut http_request: Vec<_> = b"GET /te".iter()
             .cloned().collect();
 
-        while let (Ok(Some(t)), nparsed) = parser.next_token(Some(&http_request)) {
+        loop {
+            let (t, nparsed) = parser.next_token(Some(&http_request));
             http_request.drain(..nparsed);
-            println!("{:?}", t);
+            if let Ok(Some(t)) = t {
+                tokens.push(t);
+            } else {
+                break;
+            }
         }
+
+        http_request.extend(b"st HTTP/1.0\r\n\
+                              Cont".iter().cloned());
+
+        loop {
+            let (t, nparsed) = parser.next_token(Some(&http_request));
+            http_request.drain(..nparsed);
+            if let Ok(Some(t)) = t {
+                tokens.push(t);
+            } else {
+                break;
+            }
+        }
+
+        http_request.extend(b"ent-Length: 00".iter().cloned());
+
+        loop {
+            let (t, nparsed) = parser.next_token(Some(&http_request));
+            http_request.drain(..nparsed);
+            if let Ok(Some(t)) = t {
+                tokens.push(t);
+            } else {
+                break;
+            }
+        }
+
+        http_request.extend(b"00\r\n\r\n".iter().cloned());
+
+        loop {
+            let (t, nparsed) = parser.next_token(Some(&http_request));
+            http_request.drain(..nparsed);
+            if let Ok(Some(t)) = t {
+                tokens.push(t);
+            } else {
+                break;
+            }
+        }
+
+        assert_eq!(tokens,
+                   [HttpToken::Method("GET".to_string()),
+                    HttpToken::Url("/test".to_string()),
+                    HttpToken::Field("Content-Length".to_string(),
+                                     "0000".to_string()),
+                    HttpToken::EndOfMessage]);
+        assert_eq!(parser.next_token(None), (Ok(None), 0));
     }
 }
