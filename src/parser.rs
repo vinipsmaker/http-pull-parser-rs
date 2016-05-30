@@ -1,4 +1,5 @@
 use std::fmt;
+use std;
 use http_muncher;
 use token::HttpToken;
 use parser_handler::ParserHandler;
@@ -11,6 +12,12 @@ pub struct ParserError {
 impl fmt::Display for ParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.error)
+    }
+}
+
+impl std::error::Error for ParserError {
+    fn description(&self) -> &str {
+        &self.error[..]
     }
 }
 
