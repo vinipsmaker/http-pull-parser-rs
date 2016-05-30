@@ -1,3 +1,4 @@
+use std::fmt;
 use http_muncher;
 use token::HttpToken;
 use parser_handler::ParserHandler;
@@ -5,6 +6,12 @@ use parser_handler::ParserHandler;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParserError {
     pub error: String,
+}
+
+impl fmt::Display for ParserError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.error)
+    }
 }
 
 enum ParserType {
