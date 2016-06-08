@@ -69,6 +69,9 @@ impl HttpParserCallback for ParserHandler {
         let field = to_string(field);
         let mut new_state = None;
         match self.state {
+            State::Default => {
+                new_state = Some(State::Field(field));
+            }
             State::Url(ref mut url) => {
                 let url = {
                     let mut t = String::new();
@@ -96,7 +99,6 @@ impl HttpParserCallback for ParserHandler {
                 self.pending_tokens.push_back(HttpToken::Field(f, v));
                 new_state = Some(State::Field(field));
             }
-            _ => unreachable!(),
         }
         if let Some(state) = new_state.take() {
             self.state = state;
