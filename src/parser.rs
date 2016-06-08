@@ -1,8 +1,8 @@
 use std::fmt;
 use std;
-use http_muncher;
+use http_parser::{HttpParser, HttpParserType};
 use token::HttpToken;
-use parser_handler::ParserHandler;
+use parser_handler::{ParserHandler, ParserType};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParserError {
@@ -21,83 +21,42 @@ impl std::error::Error for ParserError {
     }
 }
 
-enum ParserType {
-    Request,
-    Response,
-}
-
 pub struct Parser {
-    parser: http_muncher::Parser<ParserHandler>,
-    parser_type: ParserType,
-    error: Option<ParserError>,
-    first_line_sent: bool,
+    parser: HttpParser,
+    handler: ParserHandler,
 }
 
 impl Parser {
     pub fn request() -> Parser {
         Parser {
-            parser: http_muncher::Parser::request(ParserHandler::default()),
-            parser_type: ParserType::Request,
-            error: None,
-            first_line_sent: false,
+            parser: HttpParser::new(HttpParserType::Request),
+            handler: ParserHandler::new(ParserType::Request),
         }
     }
 
     pub fn response() -> Parser {
         Parser {
-            parser: http_muncher::Parser::response(ParserHandler::default()),
-            parser_type: ParserType::Response,
-            error: None,
-            first_line_sent: false,
+            parser: HttpParser::new(HttpParserType::Response),
+            handler: ParserHandler::new(ParserType::Response),
         }
     }
 
     pub fn next_token(&mut self, data: Option<&[u8]>)
                       -> (Result<Option<HttpToken>, ParserError>, usize) {
         let mut nparsed = 0;
-        if self.error.is_none() {
+        if self.parser.errno.is_none() {
             if let Some(data) = data {
                 if data.len() > 0 {
-                    nparsed = self.parser.parse(data);
-                    if self.parser.has_error() {
-                        self.error = Some(ParserError {
-                            error: self.parser.error().to_string(),
-                        });
-                    }
+                    nparsed = self.parser.execute(&mut self.handler, data);
                 }
             }
         }
 
-        if self.parser.get().tokens.front().is_some() && !self.first_line_sent {
-            self.first_line_sent = true;
-            match self.parser_type {
-                ParserType::Request => {
-                    return (Ok(Some(HttpToken::Method(self.parser.http_method()
-                                                      .to_string()))),
-                            nparsed);
-                }
-                ParserType::Response => {
-                    let token = match self.parser.get().tokens.pop_front()
-                        .unwrap() {
-                            HttpToken::Status(_, reason) => {
-                                HttpToken::Status(self.parser.status_code(),
-                                                  reason)
-                            }
-                            _ => unreachable!(),
-                    };
-                    return (Ok(Some(token)), nparsed);
-                }
-            }
-        }
-
-        if let Some(token) = self.parser.get().tokens.pop_front() {
-            if token == HttpToken::EndOfMessage {
-                self.first_line_sent = false;
-            }
+        if let Some(token) = self.handler.tokens.pop_front() {
             return (Ok(Some(token)), nparsed);
         } else {
-            if let Some(ref e) = self.error {
-                return (Err(e.clone()), nparsed);
+            if let Some(ref e) = self.parser.errno {
+                return (Err(ParserError { error: format!("{}", e) }), nparsed);
             } else {
                 return (Ok(None), nparsed);
             }

@@ -1,4 +1,4 @@
-extern crate http_muncher;
+extern crate http_parser;
 
 mod token;
 mod parser_handler;

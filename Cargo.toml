@@ -7,4 +7,4 @@ license = "GPL-3.0"
 repository = "https://github.com/vinipsmaker/http-pull-parser-rs"
 
 [dependencies]
-http-muncher = "0.2.3"
+http_parser = "0.0.2"

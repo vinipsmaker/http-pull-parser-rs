@@ -1,11 +1,15 @@
 use std::collections::VecDeque;
-use http_muncher;
+use http_parser::{CallbackResult, HttpParser, HttpParserCallback, ParseAction};
 use token::HttpToken;
+
+pub enum ParserType {
+    Request,
+    Response,
+}
 
 enum State {
     Default,
     Url(String),
-    Status(String),
     Field(String),
     Value(String, String),
 }
@@ -16,50 +20,52 @@ fn to_string(bytes: &[u8]) -> String {
 
 pub struct ParserHandler {
     pub tokens: VecDeque<HttpToken>,
+    pending_tokens: VecDeque<HttpToken>,
+    reason_phrase: Option<String>,
     state: State,
-    pub message_complete: bool,
+    pub parser_type: ParserType,
 }
 
-impl Default for ParserHandler {
-    fn default() -> ParserHandler {
+impl ParserHandler {
+    pub fn new(parser_type: ParserType) -> ParserHandler {
         ParserHandler {
             tokens: VecDeque::new(),
+            pending_tokens: VecDeque::new(),
+            reason_phrase: None,
             state: State::Default,
-            message_complete: false,
+            parser_type: parser_type,
         }
     }
 }
 
-impl http_muncher::ParserHandler for ParserHandler {
-    fn on_message_begin(&mut self) -> bool {
-        return true;
+impl HttpParserCallback for ParserHandler {
+    fn on_message_begin(&mut self, _parser: &mut HttpParser) -> CallbackResult {
+        return Ok(ParseAction::None);
     }
 
-    fn on_url(&mut self, url: &[u8]) -> bool {
+    fn on_url(&mut self, _parser: &mut HttpParser, url: &[u8])
+              -> CallbackResult {
         let url = to_string(url);
         match self.state {
             State::Default => self.state = State::Url(url),
             State::Url(ref mut buf) => buf.push_str(&url),
             _ => unreachable!(),
         }
-        return true;
+        return Ok(ParseAction::None);
     }
 
-    fn on_status(&mut self, status: &[u8]) -> bool {
+    fn on_status(&mut self, _parser: &mut HttpParser, status: &[u8])
+                 -> CallbackResult {
         let status = to_string(status);
-        let mut new_state = None;
-        match self.state {
-            State::Default => new_state = Some(State::Status(status)),
-            State::Status(ref mut buf) => buf.push_str(&status),
-            _ => unreachable!(),
+        match self.reason_phrase {
+            Some(ref mut buf) => buf.push_str(&status),
+            None => self.reason_phrase = Some(status),
         }
-        if let Some(state) = new_state.take() {
-            self.state = state;
-        }
-        return true;
+        return Ok(ParseAction::None);
     }
 
-    fn on_header_field(&mut self, field: &[u8]) -> bool {
+    fn on_header_field(&mut self, _parser: &mut HttpParser,
+                       field: &[u8]) -> CallbackResult {
         let field = to_string(field);
         let mut new_state = None;
         match self.state {
@@ -70,17 +76,7 @@ impl http_muncher::ParserHandler for ParserHandler {
                     mem::swap(&mut t, url);
                     t
                 };
-                self.tokens.push_back(HttpToken::Url(url));
-                new_state = Some(State::Field(field));
-            }
-            State::Status(ref mut status) => {
-                let status = {
-                    let mut t = String::new();
-                    use std::mem;
-                    mem::swap(&mut t, status);
-                    t
-                };
-                self.tokens.push_back(HttpToken::Status(0, status));
+                self.pending_tokens.push_back(HttpToken::Url(url));
                 new_state = Some(State::Field(field));
             }
             State::Field(ref mut buf) => buf.push_str(&field),
@@ -97,7 +93,7 @@ impl http_muncher::ParserHandler for ParserHandler {
                     mem::swap(&mut t, v);
                     t
                 };
-                self.tokens.push_back(HttpToken::Field(f, v));
+                self.pending_tokens.push_back(HttpToken::Field(f, v));
                 new_state = Some(State::Field(field));
             }
             _ => unreachable!(),
@@ -105,10 +101,11 @@ impl http_muncher::ParserHandler for ParserHandler {
         if let Some(state) = new_state.take() {
             self.state = state;
         }
-        return true;
+        return Ok(ParseAction::None);
     }
 
-    fn on_header_value(&mut self, value: &[u8]) -> bool {
+    fn on_header_value(&mut self, _parser: &mut HttpParser,
+                       value: &[u8]) -> CallbackResult {
         let value = to_string(value);
         let mut new_state = None;
         match self.state {
@@ -127,10 +124,11 @@ impl http_muncher::ParserHandler for ParserHandler {
         if let Some(state) = new_state.take() {
             self.state = state;
         }
-        return true;
+        return Ok(ParseAction::None);
     }
 
-    fn on_headers_complete(&mut self) -> bool {
+    fn on_headers_complete(&mut self, parser: &mut HttpParser)
+                           -> CallbackResult {
         let mut new_state = None;
         if let State::Value(ref mut f, ref mut v) = self.state {
                 let f = {
@@ -145,23 +143,36 @@ impl http_muncher::ParserHandler for ParserHandler {
                     mem::swap(&mut t, v);
                     t
                 };
-            self.tokens.push_back(HttpToken::Field(f, v));
+            self.pending_tokens.push_back(HttpToken::Field(f, v));
             new_state = Some(State::Default);
         }
         if let Some(state) = new_state.take() {
             self.state = state;
         }
-        return true;
+        let t = match self.parser_type {
+            ParserType::Request => {
+                HttpToken::Method(parser.method.unwrap().to_string())
+            }
+            ParserType::Response => {
+                HttpToken::Status(parser.status_code.unwrap(),
+                                  self.reason_phrase.take().unwrap())
+            }
+        };
+        self.tokens.push_back(t);
+        self.tokens.append(&mut self.pending_tokens);
+        return Ok(ParseAction::None);
     }
 
-    fn on_body(&mut self, body: &[u8]) -> bool {
+    fn on_body(&mut self, _parser: &mut HttpParser, body: &[u8])
+               -> CallbackResult {
         self.tokens.push_back(HttpToken::Body(body.iter().cloned().collect()));
-        return true;
+        return Ok(ParseAction::None);
     }
 
-    fn on_message_complete(&mut self) -> bool {
+    fn on_message_complete(&mut self, _parser: &mut HttpParser)
+                           -> CallbackResult {
         self.state = State::Default;
         self.tokens.push_back(HttpToken::EndOfMessage);
-        return true;
+        return Ok(ParseAction::None);
     }
 }
