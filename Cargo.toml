@@ -1,7 +1,7 @@
 [package]
 name = "http-pull-parser"
 description = "A simple almost-pull-parser for HTTP"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["MaidSafe Developers <dev@maidsafe.net>"]
 license = "GPL-3.0"
 repository = "https://github.com/vinipsmaker/http-pull-parser-rs"
